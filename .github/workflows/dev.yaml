@@ -34,43 +34,76 @@ jobs:
       - run: yarn lint 
 
   test: 
-    runs-on: ubuntu-22.04 
+      runs-on: ubuntu-22.04 
 
-    services:
-      mongodb:
-        image: mongo:4.2.1-bionic
-        ports:
-          - '27017:27017'
+      services:
+        mongodb:
+          image: mongo:4.2.1-bionic
+          ports:
+            - '27017:27017'
 
-    steps: 
+      steps: 
+        - uses: actions/checkout@v3
+          with: 
+            fetch-depth: 0
+
+        - uses: actions/setup-node@v3
+          with:
+            node-version: 16
+
+        - name: Get yarn cache directory path
+          id: yarn-cache-dir-path
+          run: echo "::set-output name=dir::$(yarn config get cacheFolder)"
+
+        - uses: actions/cache@v3
+          id: yarn-cache # use this to check for `cache-hit` (`steps.yarn-cache.outputs.cache-hit != 'true'`)
+          with:
+            path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+            key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+            restore-keys: | 
+              ${{ runner.os }}-yarn- 
+
+        - run: yarn install
+
+        - run: yarn test 
+
+          env: 
+            MONGODB_URL: mongodb://localhost:27017/node-boilerplate
+            JWT_SECRET : thisisasamplesecret
+            JWT_ACCESS_EXPIRATION_MINUTES: 30
+            JWT_REFRESH_EXPIRATION_DAYS: 30
+            JWT_RESET_PASSSWORD_EXPIRATION_MINUTES: 10
+            JWT_VERIFY_EMAIL_EXPIRATION_MINUTES: 10 
+
+  build: 
+    needs: [lint, test]
+    runs-on: ubuntu-22.04
+    steps:
       - uses: actions/checkout@v3
         with: 
           fetch-depth: 0
 
-      - uses: actions/setup-node@v3
-        with:
-          node-version: 16
+      - name : Build Dockerfile
+        uses : redhat-actions/buildah-build@v2
+        id: build_image
+        with: 
+          image: actions-demo 
+          tags: latest ${{ github.sha }}
+          containerfiles:
+            ./Dockerfile
 
-      - name: Get yarn cache directory path
-        id: yarn-cache-dir-path
-        run: echo "::set-output name=dir::$(yarn config get cacheFolder)"
+      - name: Push to GHCR
+        uses : redhat-actions/push-to-registry@v2
+        id: push
+        with: 
+          image: ${{ steps.build_image.outputs.image }} 
+          tags: ${{ steps.build_image.outputs.tags }} 
+          registry : ghcr.io/${{ github.repository_owner }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+          extra-args: | 
+            --disable-content-trust
 
-      - uses: actions/cache@v3
-        id: yarn-cache # use this to check for `cache-hit` (`steps.yarn-cache.outputs.cache-hit != 'true'`)
-        with:
-          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
-          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
-          restore-keys: | 
-            ${{ runner.os }}-yarn- 
-
-      - run: yarn install
-
-      - run: yarn test 
-
-        env: 
-          MONGODB_URL: mongodb://localhost:27017/node-boilerplate
-          JWT_SECRET : thisisasamplesecret
-          JWT_ACCESS_EXPIRATION_MINUTES: 30
-          JWT_REFRESH_EXPIRATION_DAYS: 30
-          JWT_RESET_PASSSWORD_EXPIRATION_MINUTES: 10
-          JWT_VERIFY_EMAIL_EXPIRATION_MINUTES: 10 
+      - name: Echo outputs
+        run: |
+          echo "${{ toJSON(steps.push.outputs) }}"
